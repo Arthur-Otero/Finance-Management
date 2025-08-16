@@ -4,59 +4,240 @@ from datetime import datetime
 from database.db_manager import DatabaseManager
 from models.financial_record import FinancialRecord
 from utils.validators import Validators
+from gui.theme import DarkTheme
+from gui.charts import FinancialCharts
 
 class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Controle Financeiro")
-        self.root.geometry("1400x800")
+        self.root.title("Financial Control Pro")
+        self.root.geometry("1600x900")
+        self.root.state('zoomed')  # Start maximized on Windows
         
+        # Initialize components
         self.db_manager = DatabaseManager()
         self.value_entries = []  # List to store dynamic value entries
+        
+        # Apply dark theme
+        self.theme = DarkTheme()
+        self.style = self.theme.configure_styles(self.root)
+        
+        # Initialize charts
+        self.charts = FinancialCharts(self.root, self.theme.COLORS)
+        
         self.setup_ui()
         self.load_records()
         self.update_value_entries_from_db()  # Populate entries based on existing data
+        self.refresh_dashboard()  # Load dashboard charts
     
     def setup_ui(self):
-        """Setup the user interface"""
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Configure grid weights
+        """Setup the modern user interface"""
+        # Configure root
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(1, weight=1)
         
-        # Input section
-        self.create_input_section(main_frame)
+        # Create main container
+        main_container = ttk.Frame(self.root, style='Main.TFrame')
+        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=10, pady=10)
+        main_container.columnconfigure(0, weight=1)
+        main_container.rowconfigure(1, weight=1)
         
-        # Records display section
-        self.create_records_section(main_frame)
+        # Header
+        self.create_header(main_container)
         
-        # Buttons section
-        self.create_buttons_section(main_frame)
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(main_container, style='Modern.TNotebook')
+        self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(10, 0))
+        
+        # Create tabs
+        self.create_dashboard_tab()
+        self.create_input_tab()
+        self.create_records_tab()
+        self.create_analytics_tab()
+        
+        # Bind tab change event
+        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
+    
+    def create_header(self, parent):
+        """Create application header"""
+        header_frame = ttk.Frame(parent, style='Main.TFrame')
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        header_frame.columnconfigure(1, weight=1)
+        
+        # App title and icon
+        title_frame = ttk.Frame(header_frame, style='Main.TFrame')
+        title_frame.grid(row=0, column=0, sticky=tk.W)
+        
+        ttk.Label(title_frame, text="💰", font=('Segoe UI', 24)).pack(side=tk.LEFT, padx=(0, 10))
+        
+        title_info = ttk.Frame(title_frame, style='Main.TFrame')
+        title_info.pack(side=tk.LEFT)
+        
+        ttk.Label(title_info, text="Financial Control Pro", style='Title.TLabel').pack(anchor=tk.W)
+        ttk.Label(title_info, text="Gestão Financeira Inteligente", style='Muted.TLabel').pack(anchor=tk.W)
+        
+        # Quick stats
+        self.stats_frame = ttk.Frame(header_frame, style='Main.TFrame')
+        self.stats_frame.grid(row=0, column=1, sticky=tk.E)
+        
+        self.update_header_stats()
+    
+    def update_header_stats(self):
+        """Update header statistics"""
+        # Clear existing stats
+        for widget in self.stats_frame.winfo_children():
+            widget.destroy()
+        
+        records = self.db_manager.get_all_records()
+        if records:
+            latest = records[0]
+            total_records = len(records)
+            
+            # Create stat cards
+            stats = [
+                ("Total Atual", f"R$ {latest['total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+                ("Com FGTS", f"R$ {latest['total_with_fgts']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+                ("Registros", str(total_records))
+            ]
+            
+            for i, (label, value) in enumerate(stats):
+                stat_card = ttk.Frame(self.stats_frame, style='Card.TFrame')
+                stat_card.grid(row=0, column=i, padx=(10, 0), pady=5)
+                
+                ttk.Label(stat_card, text=value, style='Heading.TLabel').pack(pady=(10, 0), padx=15)
+                ttk.Label(stat_card, text=label, style='Muted.TLabel').pack(pady=(0, 10), padx=15)
+    
+    def create_dashboard_tab(self):
+        """Create dashboard tab with charts and overview"""
+        dashboard_frame = ttk.Frame(self.notebook, style='Main.TFrame')
+        self.notebook.add(dashboard_frame, text='📊 Dashboard')
+        
+        dashboard_frame.columnconfigure(0, weight=1)
+        dashboard_frame.rowconfigure(0, weight=1)
+        
+        # Create scrollable frame
+        canvas = tk.Canvas(dashboard_frame, bg=self.theme.COLORS['bg_primary'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(dashboard_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, style='Main.TFrame')
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Dashboard content
+        self.create_dashboard_content(scrollable_frame)
+        
+        # Store references
+        self.dashboard_canvas = canvas
+        self.dashboard_frame = scrollable_frame
+    
+    def create_dashboard_content(self, parent):
+        """Create dashboard content with charts"""
+        parent.columnconfigure(0, weight=1)
+        parent.columnconfigure(1, weight=1)
+        
+        # Welcome section
+        welcome_frame = ttk.LabelFrame(parent, text="Visão Geral", style='Modern.TLabelframe', padding=20)
+        welcome_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 20), padx=10)
+        welcome_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(welcome_frame, text="Bem-vindo ao seu painel financeiro", style='Heading.TLabel').pack(anchor=tk.W)
+        ttk.Label(welcome_frame, text="Acompanhe sua evolução financeira com gráficos interativos e análises detalhadas.", 
+                 style='Body.TLabel').pack(anchor=tk.W, pady=(5, 0))
+        
+        # Charts section
+        # Evolution chart
+        evolution_frame = ttk.LabelFrame(parent, text="Evolução Financeira", style='Modern.TLabelframe', padding=10)
+        evolution_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 20), padx=10)
+        evolution_frame.columnconfigure(0, weight=1)
+        evolution_frame.rowconfigure(0, weight=1)
+        
+        self.evolution_chart_frame = ttk.Frame(evolution_frame, style='Main.TFrame')
+        self.evolution_chart_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Breakdown and growth charts
+        breakdown_frame = ttk.LabelFrame(parent, text="Composição Atual", style='Modern.TLabelframe', padding=10)
+        breakdown_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 20), padx=(10, 5))
+        breakdown_frame.columnconfigure(0, weight=1)
+        breakdown_frame.rowconfigure(0, weight=1)
+        
+        self.breakdown_chart_frame = ttk.Frame(breakdown_frame, style='Main.TFrame')
+        self.breakdown_chart_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        growth_frame = ttk.LabelFrame(parent, text="Análise de Crescimento", style='Modern.TLabelframe', padding=10)
+        growth_frame.grid(row=2, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 20), padx=(5, 10))
+        growth_frame.columnconfigure(0, weight=1)
+        growth_frame.rowconfigure(0, weight=1)
+        
+        self.growth_chart_frame = ttk.Frame(growth_frame, style='Main.TFrame')
+        self.growth_chart_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    
+    def create_input_tab(self):
+        """Create input tab for adding new records"""
+        input_frame = ttk.Frame(self.notebook, style='Main.TFrame')
+        self.notebook.add(input_frame, text='➕ Novo Registro')
+        
+        input_frame.columnconfigure(0, weight=1)
+        input_frame.rowconfigure(0, weight=1)
+        
+        # Create scrollable frame
+        canvas = tk.Canvas(input_frame, bg=self.theme.COLORS['bg_primary'], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(input_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, style='Main.TFrame')
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Input content
+        self.create_input_content(scrollable_frame)
+    
+    def create_input_content(self, parent):
+        """Create input form content"""
+        parent.columnconfigure(0, weight=1)
+        
+        # Form container
+        form_container = ttk.Frame(parent, style='Main.TFrame')
+        form_container.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=50, pady=30)
+        form_container.columnconfigure(0, weight=1)
+        
+        # Title
+        ttk.Label(form_container, text="Adicionar Novo Registro", style='Title.TLabel').pack(anchor=tk.W, pady=(0, 20))
+        
+        self.create_input_section(form_container)
     
     def create_input_section(self, parent):
-        """Create input fields section"""
-        input_frame = ttk.LabelFrame(parent, text="Novo Registro", padding="10")
-        input_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        input_frame.columnconfigure(1, weight=1)
+        """Create modern input fields section"""
+        # Basic info section
+        basic_frame = ttk.LabelFrame(parent, text="Informações Básicas", style='Modern.TLabelframe', padding=20)
+        basic_frame.pack(fill=tk.X, pady=(0, 20))
+        basic_frame.columnconfigure(1, weight=1)
         
         # Date input
-        date_frame = ttk.Frame(input_frame)
-        date_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        ttk.Label(date_frame, text="Data (DD/MM/AAAA):").pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(basic_frame, text="Data:", style='Body.TLabel').grid(row=0, column=0, sticky=tk.W, padx=(0, 10), pady=(0, 10))
         self.date_var = tk.StringVar(value=datetime.now().strftime("%d/%m/%Y"))
-        ttk.Entry(date_frame, textvariable=self.date_var, width=15).pack(side=tk.LEFT, padx=(0, 20))
+        date_entry = ttk.Entry(basic_frame, textvariable=self.date_var, style='Modern.TEntry', width=15)
+        date_entry.grid(row=0, column=1, sticky=tk.W, pady=(0, 10))
         
         # FGTS input (optional)
-        ttk.Label(date_frame, text="FGTS (opcional):").pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Label(basic_frame, text="FGTS (opcional):", style='Body.TLabel').grid(row=0, column=2, sticky=tk.W, padx=(30, 10), pady=(0, 10))
         self.fgts_var = tk.StringVar()
-        fgts_entry = ttk.Entry(date_frame, textvariable=self.fgts_var, width=15)
-        fgts_entry.pack(side=tk.LEFT)
+        fgts_entry = ttk.Entry(basic_frame, textvariable=self.fgts_var, style='Modern.TEntry', width=15)
+        fgts_entry.grid(row=0, column=3, sticky=tk.W, pady=(0, 10))
         
         # Add placeholder text hint
         fgts_entry.insert(0, "0,00")
@@ -64,14 +245,15 @@ class MainWindow:
         fgts_entry.bind("<FocusOut>", lambda e: self.on_fgts_focus_out(e))
         
         # Dynamic values section
-        values_frame = ttk.LabelFrame(input_frame, text="Valores", padding="5")
-        values_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        values_frame = ttk.LabelFrame(parent, text="Valores Financeiros", style='Modern.TLabelframe', padding=20)
+        values_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
         values_frame.columnconfigure(0, weight=1)
+        values_frame.rowconfigure(0, weight=1)
         
         # Scrollable frame for values
-        self.values_canvas = tk.Canvas(values_frame, height=150)
+        self.values_canvas = tk.Canvas(values_frame, height=200, bg=self.theme.COLORS['bg_primary'], highlightthickness=0)
         self.values_scrollbar = ttk.Scrollbar(values_frame, orient="vertical", command=self.values_canvas.yview)
-        self.values_scrollable_frame = ttk.Frame(self.values_canvas)
+        self.values_scrollable_frame = ttk.Frame(self.values_canvas, style='Main.TFrame')
         
         self.values_scrollable_frame.bind(
             "<Configure>",
@@ -81,40 +263,38 @@ class MainWindow:
         self.values_canvas.create_window((0, 0), window=self.values_scrollable_frame, anchor="nw")
         self.values_canvas.configure(yscrollcommand=self.values_scrollbar.set)
         
-        self.values_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.values_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        self.values_canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 15))
+        self.values_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S), pady=(0, 15))
         
         # Buttons for managing values
-        values_buttons_frame = ttk.Frame(values_frame)
-        values_buttons_frame.grid(row=1, column=0, columnspan=2, pady=(5, 0))
+        values_buttons_frame = ttk.Frame(values_frame, style='Main.TFrame')
+        values_buttons_frame.grid(row=1, column=0, columnspan=2, sticky=tk.W)
         
-        ttk.Button(values_buttons_frame, text="+ Adicionar Valor", command=self.add_value_entry).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(values_buttons_frame, text="Gerenciar Colunas", command=self.manage_columns).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(values_buttons_frame, text="Limpar Valores", command=self.clear_value_entries).pack(side=tk.LEFT)
+        ttk.Button(values_buttons_frame, text="➕ Adicionar Valor", command=self.add_value_entry, 
+                  style='Accent.TButton').pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(values_buttons_frame, text="⚙️ Gerenciar Colunas", command=self.manage_columns).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(values_buttons_frame, text="🗑️ Limpar Valores", command=self.clear_value_entries).pack(side=tk.LEFT)
         
         # Help message frame (will be shown when no entries exist)
-        self.help_message_frame = ttk.Frame(values_frame)
-        self.help_message_frame.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        self.help_message_frame = ttk.Frame(values_frame, style='Main.TFrame')
+        self.help_message_frame.grid(row=2, column=0, columnspan=2, pady=(20, 0))
         
         help_label = ttk.Label(self.help_message_frame, 
-                              text="Nenhum campo de valor adicionado.\nClique em '+ Adicionar Valor' para começar ou 'Gerenciar Colunas' para usar campos existentes.",
-                              font=('TkDefaultFont', 9), 
-                              foreground='gray',
+                              text="Nenhum campo de valor adicionado.\nClique em '➕ Adicionar Valor' para começar ou '⚙️ Gerenciar Colunas' para usar campos existentes.",
+                              style='Muted.TLabel',
                               justify=tk.CENTER)
         help_label.pack()
         
         # Initially hide the help message
         self.help_message_frame.grid_remove()
         
-        # Initial value entries will be added automatically based on existing data
-        # or user can add them manually
-        
         # Action buttons
-        action_frame = ttk.Frame(input_frame)
-        action_frame.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        action_frame = ttk.Frame(parent, style='Main.TFrame')
+        action_frame.pack(fill=tk.X, pady=(0, 20))
         
-        ttk.Button(action_frame, text="Adicionar Registro", command=self.add_record).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(action_frame, text="Limpar Campos", command=self.clear_fields).pack(side=tk.LEFT)
+        ttk.Button(action_frame, text="💾 Adicionar Registro", command=self.add_record, 
+                  style='Success.TButton').pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(action_frame, text="🔄 Limpar Campos", command=self.clear_fields).pack(side=tk.LEFT)
     
     def add_value_entry(self, default_name=""):
         """Add a new value entry row"""
@@ -126,20 +306,21 @@ class MainWindow:
         entry_frame.columnconfigure(3, weight=1)
         
         # Name entry
-        ttk.Label(entry_frame, text="Nome:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        ttk.Label(entry_frame, text="Nome:", style='Body.TLabel').grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
         name_var = tk.StringVar(value=default_name)
-        name_entry = ttk.Entry(entry_frame, textvariable=name_var, width=15)
-        name_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+        name_entry = ttk.Entry(entry_frame, textvariable=name_var, style='Modern.TEntry', width=20)
+        name_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 20))
         
         # Value entry
-        ttk.Label(entry_frame, text="Valor:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        ttk.Label(entry_frame, text="Valor:", style='Body.TLabel').grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
         value_var = tk.StringVar()
-        value_entry = ttk.Entry(entry_frame, textvariable=value_var, width=15)
-        value_entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 10))
+        value_entry = ttk.Entry(entry_frame, textvariable=value_var, style='Modern.TEntry', width=20)
+        value_entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 20))
         
         # Remove button
-        remove_btn = ttk.Button(entry_frame, text="×", width=3, 
-                               command=lambda: self.remove_value_entry(row))
+        remove_btn = ttk.Button(entry_frame, text="❌", width=4, 
+                               command=lambda: self.remove_value_entry(row),
+                               style='Warning.TButton')
         remove_btn.grid(row=0, column=4, padx=(5, 0))
         
         # Store the entry data
@@ -447,19 +628,68 @@ class MainWindow:
         # Update help message visibility
         self.update_help_message_visibility()
     
-    def create_records_section(self, parent):
-        """Create records display section"""
-        records_frame = ttk.LabelFrame(parent, text="Registros Financeiros", padding="10")
-        records_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S))
-        records_frame.columnconfigure(0, weight=1)
-        records_frame.rowconfigure(0, weight=1)
+    def create_records_tab(self):
+        """Create records tab for viewing all records"""
+        records_frame = ttk.Frame(self.notebook, style='Main.TFrame')
+        self.notebook.add(records_frame, text='📋 Registros')
         
-        # Create treeview with basic columns (will be updated dynamically)
-        self.tree = ttk.Treeview(records_frame, show='headings', height=15)
+        records_frame.columnconfigure(0, weight=1)
+        records_frame.rowconfigure(1, weight=1)
+        
+        # Header with controls
+        header_frame = ttk.Frame(records_frame, style='Main.TFrame')
+        header_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=20, pady=(20, 10))
+        header_frame.columnconfigure(0, weight=1)
+        
+        ttk.Label(header_frame, text="Histórico de Registros", style='Title.TLabel').pack(side=tk.LEFT)
+        
+        controls_frame = ttk.Frame(header_frame, style='Main.TFrame')
+        controls_frame.pack(side=tk.RIGHT)
+        
+        ttk.Button(controls_frame, text="🔄 Atualizar", command=self.load_records).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(controls_frame, text="🗑️ Excluir Selecionado", command=self.delete_selected, 
+                  style='Warning.TButton').pack(side=tk.LEFT)
+        
+        # Records table
+        self.create_records_section(records_frame)
+    
+    def create_analytics_tab(self):
+        """Create analytics tab with detailed analysis"""
+        analytics_frame = ttk.Frame(self.notebook, style='Main.TFrame')
+        self.notebook.add(analytics_frame, text='📈 Análises')
+        
+        analytics_frame.columnconfigure(0, weight=1)
+        analytics_frame.rowconfigure(0, weight=1)
+        
+        # Placeholder for future analytics features
+        placeholder_frame = ttk.Frame(analytics_frame, style='Main.TFrame')
+        placeholder_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        placeholder_frame.columnconfigure(0, weight=1)
+        placeholder_frame.rowconfigure(0, weight=1)
+        
+        content_frame = ttk.Frame(placeholder_frame, style='Main.TFrame')
+        content_frame.grid(row=0, column=0)
+        
+        ttk.Label(content_frame, text="📊", font=('Segoe UI', 48)).pack(pady=(50, 20))
+        ttk.Label(content_frame, text="Análises Avançadas", style='Title.TLabel').pack(pady=(0, 10))
+        ttk.Label(content_frame, text="Funcionalidades de análise detalhada em desenvolvimento", 
+                 style='Body.TLabel').pack()
+        ttk.Label(content_frame, text="• Projeções financeiras\n• Análise de tendências\n• Relatórios personalizados\n• Comparações temporais", 
+                 style='Muted.TLabel', justify=tk.LEFT).pack(pady=(20, 0))
+    
+    def create_records_section(self, parent):
+        """Create modern records display section"""
+        table_frame = ttk.Frame(parent, style='Main.TFrame')
+        table_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=20, pady=(0, 20))
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+        
+        # Create treeview with modern styling
+        self.tree = ttk.Treeview(table_frame, show='headings', height=20, style='Modern.Treeview')
         
         # Scrollbars
-        v_scrollbar = ttk.Scrollbar(records_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        h_scrollbar = ttk.Scrollbar(records_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        v_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        h_scrollbar = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
         # Grid layout
@@ -467,14 +697,34 @@ class MainWindow:
         v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
         h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
     
-    def create_buttons_section(self, parent):
-        """Create buttons section"""
-        buttons_frame = ttk.Frame(parent)
-        buttons_frame.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+    def on_tab_changed(self, event):
+        """Handle tab change events"""
+        selected_tab = event.widget.tab('current')['text']
         
-        ttk.Button(buttons_frame, text="Atualizar", command=self.load_records).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(buttons_frame, text="Excluir Selecionado", command=self.delete_selected).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(buttons_frame, text="Limpar Campos", command=self.clear_fields).pack(side=tk.LEFT)
+        if '📊 Dashboard' in selected_tab:
+            self.refresh_dashboard()
+        elif '📋 Registros' in selected_tab:
+            self.load_records()
+    
+    def refresh_dashboard(self):
+        """Refresh dashboard charts and data"""
+        records = self.db_manager.get_all_records()
+        
+        # Update header stats
+        self.update_header_stats()
+        
+        # Update charts
+        if hasattr(self, 'evolution_chart_frame'):
+            evolution_fig = self.charts.create_evolution_chart(records)
+            self.charts.embed_chart(self.evolution_chart_frame, evolution_fig)
+        
+        if hasattr(self, 'breakdown_chart_frame'):
+            breakdown_fig = self.charts.create_values_breakdown_chart(records)
+            self.charts.embed_chart(self.breakdown_chart_frame, breakdown_fig)
+        
+        if hasattr(self, 'growth_chart_frame'):
+            growth_fig = self.charts.create_growth_chart(records)
+            self.charts.embed_chart(self.growth_chart_frame, growth_fig)
     
     def add_record(self):
         """Add a new financial record"""
@@ -534,6 +784,7 @@ class MainWindow:
                 messagebox.showinfo("Sucesso", "Registro adicionado com sucesso!")
                 self.clear_fields()
                 self.load_records()
+                self.refresh_dashboard()  # Update dashboard charts
             else:
                 messagebox.showerror("Erro", "Erro ao adicionar registro")
                 
@@ -637,6 +888,7 @@ class MainWindow:
             if success:
                 messagebox.showinfo("Sucesso", "Registro excluído com sucesso!")
                 self.load_records()
+                self.refresh_dashboard()  # Update dashboard charts
             else:
                 messagebox.showerror("Erro", "Erro ao excluir registro")
     
