@@ -15,6 +15,7 @@ class MainWindow:
         self.value_entries = []  # List to store dynamic value entries
         self.setup_ui()
         self.load_records()
+        self.update_value_entries_from_db()  # Populate entries based on existing data
     
     def setup_ui(self):
         """Setup the user interface"""
@@ -88,11 +89,25 @@ class MainWindow:
         values_buttons_frame.grid(row=1, column=0, columnspan=2, pady=(5, 0))
         
         ttk.Button(values_buttons_frame, text="+ Adicionar Valor", command=self.add_value_entry).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(values_buttons_frame, text="Gerenciar Colunas", command=self.manage_columns).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(values_buttons_frame, text="Limpar Valores", command=self.clear_value_entries).pack(side=tk.LEFT)
         
-        # Add initial value entries
-        self.add_value_entry("Valor 1")
-        self.add_value_entry("Valor 2")
+        # Help message frame (will be shown when no entries exist)
+        self.help_message_frame = ttk.Frame(values_frame)
+        self.help_message_frame.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        
+        help_label = ttk.Label(self.help_message_frame, 
+                              text="Nenhum campo de valor adicionado.\nClique em '+ Adicionar Valor' para começar ou 'Gerenciar Colunas' para usar campos existentes.",
+                              font=('TkDefaultFont', 9), 
+                              foreground='gray',
+                              justify=tk.CENTER)
+        help_label.pack()
+        
+        # Initially hide the help message
+        self.help_message_frame.grid_remove()
+        
+        # Initial value entries will be added automatically based on existing data
+        # or user can add them manually
         
         # Action buttons
         action_frame = ttk.Frame(input_frame)
@@ -163,18 +178,33 @@ class MainWindow:
             entry['remove_btn'].configure(command=lambda idx=i: self.remove_value_entry(idx))
     
     def clear_value_entries(self):
-        """Clear all value entries and add default ones"""
+        """Clear all value entries and add ones based on database if available"""
         for entry in self.value_entries:
             entry['frame'].destroy()
         self.value_entries.clear()
         
-        self.add_value_entry("Valor 1")
-        self.add_value_entry("Valor 2")
+        # Get existing columns from database
+        existing_columns = self.get_all_value_names_from_db()
+        
+        if existing_columns:
+            # Add entries for existing columns
+            for col_name in existing_columns:
+                self.add_value_entry(col_name)
+        # If no existing columns, leave empty - user must add manually
     
     def update_values_canvas(self):
         """Update the canvas scroll region"""
         self.values_canvas.update_idletasks()
         self.values_canvas.configure(scrollregion=self.values_canvas.bbox("all"))
+        self.update_help_message_visibility()
+    
+    def update_help_message_visibility(self):
+        """Show or hide help message based on whether there are value entries"""
+        if hasattr(self, 'help_message_frame'):
+            if len(self.value_entries) == 0:
+                self.help_message_frame.grid()
+            else:
+                self.help_message_frame.grid_remove()
     
     def on_fgts_focus_in(self, event):
         """Handle FGTS field focus in - clear placeholder if it's the default"""
@@ -185,6 +215,237 @@ class MainWindow:
         """Handle FGTS field focus out - restore placeholder if empty"""
         if not self.fgts_var.get().strip():
             self.fgts_var.set("0,00")
+    
+    def get_all_value_names_from_db(self):
+        """Get all unique value names from the database"""
+        records = self.db_manager.get_all_records()
+        all_value_names = set()
+        for record in records:
+            for value in record['values']:
+                all_value_names.add(value['name'])
+        return sorted(list(all_value_names))
+    
+    def update_value_entries_from_db(self):
+        """Update value entries based on existing database columns"""
+        existing_names = self.get_all_value_names_from_db()
+        current_names = [entry['name_var'].get() for entry in self.value_entries]
+        
+        # Add entries for new columns found in database
+        for name in existing_names:
+            if name not in current_names:
+                self.add_value_entry(name)
+    
+    def manage_columns(self):
+        """Open column management dialog"""
+        self.open_column_manager()
+    
+    def open_column_manager(self):
+        """Open a dialog to manage database value columns"""
+        # Create column management window
+        self.column_window = tk.Toplevel(self.root)
+        self.column_window.title("Gerenciar Colunas do Banco de Dados")
+        self.column_window.geometry("500x600")
+        self.column_window.transient(self.root)
+        self.column_window.grab_set()
+        
+        # Main frame
+        main_frame = ttk.Frame(self.column_window, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Instructions
+        ttk.Label(main_frame, text="Gerenciamento de Colunas do Banco de Dados", 
+                 font=('TkDefaultFont', 12, 'bold')).pack(pady=(0, 5))
+        ttk.Label(main_frame, text="Renomeie, exclua ou crie novas colunas de valores no banco de dados.", 
+                 font=('TkDefaultFont', 9)).pack(pady=(0, 15))
+        
+        # Current database columns
+        columns_frame = ttk.LabelFrame(main_frame, text="Colunas Existentes no Banco de Dados", padding="10")
+        columns_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
+        
+        # Listbox for database columns
+        listbox_frame = ttk.Frame(columns_frame)
+        listbox_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        scrollbar = ttk.Scrollbar(listbox_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.columns_listbox = tk.Listbox(listbox_frame, yscrollcommand=scrollbar.set, height=8)
+        self.columns_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.columns_listbox.yview)
+        
+        # Populate columns
+        self.refresh_columns_listbox()
+        
+        # Action buttons
+        actions_frame = ttk.Frame(columns_frame)
+        actions_frame.pack(fill=tk.X)
+        
+        ttk.Button(actions_frame, text="Renomear Coluna", 
+                  command=self.rename_column_dialog).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(actions_frame, text="Excluir Coluna", 
+                  command=self.delete_column_dialog).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(actions_frame, text="Atualizar Lista", 
+                  command=self.refresh_columns_listbox).pack(side=tk.LEFT)
+        
+        # Create new column section
+        create_frame = ttk.LabelFrame(main_frame, text="Criar Nova Coluna", padding="10")
+        create_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        # New column input
+        input_frame = ttk.Frame(create_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(input_frame, text="Nome da nova coluna:").pack(side=tk.LEFT, padx=(0, 10))
+        self.new_column_var = tk.StringVar()
+        self.new_column_entry = ttk.Entry(input_frame, textvariable=self.new_column_var, width=25)
+        self.new_column_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self.new_column_entry.bind('<Return>', lambda e: self.create_new_column())
+        
+        ttk.Button(input_frame, text="Criar Coluna", 
+                  command=self.create_new_column).pack(side=tk.LEFT)
+        
+        # Help text
+        ttk.Label(create_frame, text="Nota: Criar uma coluna apenas adiciona o nome aos campos de entrada.\nVocê precisará adicionar valores nos registros para que apareça no banco.", 
+                 font=('TkDefaultFont', 8), foreground='gray').pack(pady=(5, 0))
+        
+        # Close button
+        ttk.Button(main_frame, text="Fechar", command=self.column_window.destroy).pack(pady=(10, 0))
+    
+    def refresh_columns_listbox(self):
+        """Refresh the database columns listbox"""
+        if hasattr(self, 'columns_listbox'):
+            self.columns_listbox.delete(0, tk.END)
+            columns = self.get_all_value_names_from_db()
+            for col in columns:
+                self.columns_listbox.insert(tk.END, col)
+    
+    def rename_column_dialog(self):
+        """Open dialog to rename a column"""
+        selection = self.columns_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione uma coluna para renomear")
+            return
+        
+        old_name = self.columns_listbox.get(selection[0])
+        
+        # Create rename dialog
+        rename_dialog = tk.Toplevel(self.column_window)
+        rename_dialog.title("Renomear Coluna")
+        rename_dialog.geometry("400x200")
+        rename_dialog.transient(self.column_window)
+        rename_dialog.grab_set()
+        
+        # Center the dialog
+        rename_dialog.update_idletasks()
+        x = (rename_dialog.winfo_screenwidth() // 2) - (400 // 2)
+        y = (rename_dialog.winfo_screenheight() // 2) - (200 // 2)
+        rename_dialog.geometry(f"400x200+{x}+{y}")
+        
+        main_frame = ttk.Frame(rename_dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=f"Renomear coluna: '{old_name}'", 
+                 font=('TkDefaultFont', 10, 'bold')).pack(pady=(0, 15))
+        
+        ttk.Label(main_frame, text="Novo nome:").pack(anchor=tk.W, pady=(0, 5))
+        new_name_var = tk.StringVar(value=old_name)
+        new_name_entry = ttk.Entry(main_frame, textvariable=new_name_var, width=30)
+        new_name_entry.pack(fill=tk.X, pady=(0, 15))
+        new_name_entry.select_range(0, tk.END)
+        new_name_entry.focus()
+        
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def confirm_rename():
+            new_name = new_name_var.get().strip()
+            if not new_name:
+                messagebox.showerror("Erro", "O nome da coluna não pode estar vazio")
+                return
+            
+            if new_name == old_name:
+                rename_dialog.destroy()
+                return
+            
+            # Check if new name already exists
+            existing_columns = self.get_all_value_names_from_db()
+            if new_name in existing_columns:
+                messagebox.showerror("Erro", f"Já existe uma coluna com o nome '{new_name}'")
+                return
+            
+            # Confirm the operation
+            if messagebox.askyesno("Confirmar", 
+                                 f"Tem certeza que deseja renomear a coluna '{old_name}' para '{new_name}'?\n\n"
+                                 f"Esta operação afetará todos os registros existentes."):
+                
+                success = self.db_manager.rename_value_column(old_name, new_name)
+                if success:
+                    messagebox.showinfo("Sucesso", f"Coluna renomeada de '{old_name}' para '{new_name}'!")
+                    self.refresh_columns_listbox()
+                    self.load_records()  # Refresh the main table
+                    self.update_value_entries_from_db()  # Update input fields
+                    rename_dialog.destroy()
+                else:
+                    messagebox.showerror("Erro", "Erro ao renomear a coluna")
+        
+        ttk.Button(button_frame, text="Renomear", command=confirm_rename).pack(side=tk.RIGHT, padx=(10, 0))
+        ttk.Button(button_frame, text="Cancelar", command=rename_dialog.destroy).pack(side=tk.RIGHT)
+    
+    def delete_column_dialog(self):
+        """Open dialog to delete a column"""
+        selection = self.columns_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("Aviso", "Selecione uma coluna para excluir")
+            return
+        
+        column_name = self.columns_listbox.get(selection[0])
+        
+        # Confirm deletion
+        if messagebox.askyesno("Confirmar Exclusão", 
+                             f"Tem certeza que deseja excluir a coluna '{column_name}'?\n\n"
+                             f"Esta operação:\n"
+                             f"• Removerá todos os valores desta coluna de todos os registros\n"
+                             f"• Recalculará os totais automaticamente\n"
+                             f"• NÃO PODE SER DESFEITA\n\n"
+                             f"Deseja continuar?"):
+            
+            success = self.db_manager.delete_value_column(column_name)
+            if success:
+                messagebox.showinfo("Sucesso", f"Coluna '{column_name}' excluída com sucesso!")
+                self.refresh_columns_listbox()
+                self.load_records()  # Refresh the main table
+                self.update_value_entries_from_db()  # Update input fields
+            else:
+                messagebox.showerror("Erro", "Erro ao excluir a coluna")
+    
+    def create_new_column(self):
+        """Create a new column (add to input fields)"""
+        new_name = self.new_column_var.get().strip()
+        if not new_name:
+            messagebox.showerror("Erro", "Digite um nome para a nova coluna")
+            return
+        
+        # Check if name already exists in database
+        existing_columns = self.get_all_value_names_from_db()
+        if new_name in existing_columns:
+            messagebox.showwarning("Aviso", f"A coluna '{new_name}' já existe no banco de dados")
+            return
+        
+        # Check if name already exists in input fields
+        current_names = [entry['name_var'].get() for entry in self.value_entries]
+        if new_name in current_names:
+            messagebox.showwarning("Aviso", f"Já existe um campo de entrada com o nome '{new_name}'")
+            return
+        
+        # Add to input fields
+        self.add_value_entry(new_name)
+        self.new_column_var.set("")
+        messagebox.showinfo("Sucesso", f"Campo '{new_name}' adicionado aos campos de entrada!\n\n"
+                                     f"Adicione valores com este nome em novos registros para que apareça no banco de dados.")
+        
+        # Update help message visibility
+        self.update_help_message_visibility()
     
     def create_records_section(self, parent):
         """Create records display section"""
@@ -218,6 +479,11 @@ class MainWindow:
     def add_record(self):
         """Add a new financial record"""
         try:
+            # Check if there are any value entries
+            if not self.value_entries:
+                messagebox.showerror("Erro", "Adicione pelo menos um campo de valor antes de criar um registro.\nClique em '+ Adicionar Valor' para adicionar um campo.")
+                return
+            
             # Validate date
             date_valid, date_error = Validators.validate_date(self.date_var.get())
             if not date_valid:
@@ -351,6 +617,9 @@ class MainWindow:
             ])
             
             self.tree.insert('', 'end', values=row_data)
+        
+        # Update value entries if new columns were found
+        self.update_value_entries_from_db()
     
     def delete_selected(self):
         """Delete selected record"""

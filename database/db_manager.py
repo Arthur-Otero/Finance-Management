@@ -162,3 +162,90 @@ class DatabaseManager:
             if record['date'] == date:
                 return record
         return None
+    
+    def rename_value_column(self, old_name: str, new_name: str) -> bool:
+        """Rename a value column across all records"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE record_values 
+                    SET value_name = ? 
+                    WHERE value_name = ?
+                ''', (new_name, old_name))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Error renaming column: {e}")
+            return False
+    
+    def delete_value_column(self, column_name: str) -> bool:
+        """Delete a value column from all records"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Delete all values with this name
+                cursor.execute('DELETE FROM record_values WHERE value_name = ?', (column_name,))
+                
+                # Recalculate totals for affected records
+                cursor.execute('''
+                    SELECT DISTINCT daily_record_id 
+                    FROM record_values rv
+                    WHERE daily_record_id IN (
+                        SELECT DISTINCT daily_record_id 
+                        FROM record_values 
+                        WHERE value_name != ?
+                    )
+                ''', (column_name,))
+                
+                affected_records = cursor.fetchall()
+                
+                for (record_id,) in affected_records:
+                    # Get remaining values for this record
+                    cursor.execute('''
+                        SELECT SUM(value_amount) 
+                        FROM record_values 
+                        WHERE daily_record_id = ?
+                    ''', (record_id,))
+                    
+                    new_total = cursor.fetchone()[0] or 0
+                    
+                    # Get FGTS for this record
+                    cursor.execute('SELECT fgts FROM daily_records WHERE id = ?', (record_id,))
+                    fgts = cursor.fetchone()[0] or 0
+                    
+                    new_total_with_fgts = new_total + fgts
+                    
+                    # Update totals
+                    cursor.execute('''
+                        UPDATE daily_records 
+                        SET total = ?, total_with_fgts = ?
+                        WHERE id = ?
+                    ''', (new_total, new_total_with_fgts, record_id))
+                
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error deleting column: {e}")
+            return False
+    
+    def create_value_column(self, column_name: str) -> bool:
+        """Create a new value column (just validates the name doesn't exist)"""
+        try:
+            existing_columns = self.get_all_value_names()
+            return column_name not in existing_columns
+        except Exception as e:
+            print(f"Error checking column name: {e}")
+            return False
+    
+    def get_all_value_names(self) -> List[str]:
+        """Get all unique value names from the database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT DISTINCT value_name FROM record_values ORDER BY value_name')
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"Error getting value names: {e}")
+            return []
